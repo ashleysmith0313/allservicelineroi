@@ -384,6 +384,36 @@ service_lines:
       hours_per_shift: 10
       travel_per_day: 390
 
+  - key: gastroenterology_outpatient_no_eus_ercp
+    display_name: "Gastroenterology (Outpatient only — no EUS/ERCP)"
+    capacity_label: "Cases"
+    default:
+      total_units: 14
+      occupancy_pct: 75
+      unit_rev: 1800    # outpatient colonoscopy/EGD typical; adjust to your site
+      unit_cost: 900
+      referrals_per_unit: 0.5
+    referrals:
+      revenue_per_referral: 900
+      types:
+        - name: "Pathology"
+          pct: 35
+        - name: "GI clinic follow-up"
+          pct: 25
+        - name: "Imaging"
+          pct: 20
+        - name: "Surgery referrals"
+          pct: 20
+    locum:
+      enabled: false
+      default_count: 0
+      utilization_pct: 0
+      hourly_rate: 265
+      hours_per_shift: 10
+      travel_per_day: 390
+    assumptions:
+      - "Outpatient GI only; excludes EUS/ERCP. Revenues/costs are placeholders."
+
   - key: cardiology_noninvasive
     display_name: "Cardiology (Non-invasive)"
     capacity_label: "Studies"
