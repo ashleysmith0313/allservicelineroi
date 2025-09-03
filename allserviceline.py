@@ -9,7 +9,7 @@ except Exception:
 
 st.set_page_config(page_title="All-Service Line ROI Calculator", layout="centered")
 st.title("🏥 All-Service Line ROI Calculator")
-st.caption("Modeled on your Hospitalist ROI app • Powered by VISTA")
+st.caption("All Revenue ans Cost Values are assumptive and can be modified with actual values • Powered by VISTA")
 
 # -------------------------------
 # Config loading (supports config/service_lines.yaml)
