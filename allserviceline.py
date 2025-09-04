@@ -198,7 +198,9 @@ if use_locums:
         <strong>Annualized Net ROI (With Locum): ${annualized_net:,.0f}</strong><br>
         <em>Annualized Locum Cost: ${annualized_locum_cost:,.0f}</em>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+        unsafe_allow_html=True,
+    )
 else:
     st.markdown(
         f"""
@@ -206,34 +208,9 @@ else:
         <div style='background-color:#990000;padding:1rem;border-radius:8px;color:white;'>
         <strong>Annualized Net Loss: (${annualized_missed:,.0f})</strong>
         </div>
-        """, unsafe_allow_html=True)
-
-# -------------------------------
-# Impact vs the other scenario
-# -------------------------------
-st.subheader("📉 Impact of Turning Locums Off/On")
-if use_locums:
-    # Show improvement vs WITHOUT locums
-    delta_units = with_locums["units_covered"] - without_locums["units_covered"]
-    delta_gross = with_locums["gross_rev"] - without_locums["gross_rev"]
-    delta_ref = with_locums["referral_rev"] - without_locums["referral_rev"]
-    delta_net = with_locums["net_after"] - without_locums["net_after"]
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Extra Units Covered", delta_units)
-    c2.metric("Top-line ↑ (Gross)", f"${delta_gross:,.0f}")
-    c3.metric("Referral Revenue ↑", f"${delta_ref:,.0f}")
-    c4.metric("Net Impact ↑ (After Locum)", f"${delta_net:,.0f}")
-else:
-    # Show losses vs WITH locums
-    delta_units = without_locums["units_covered"] - with_locums["units_covered"]
-    delta_gross = without_locums["gross_rev"] - with_locums["gross_rev"]
-    delta_ref = without_locums["referral_rev"] - with_locums["referral_rev"]
-    delta_net = without_locums["net_after"] - with_locums["net_after"]
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Units Lost", delta_units)
-    c2.metric("Top-line Lost", f"${-delta_gross:,.0f}")  # negative shown as positive loss
-    c3.metric("Referral Revenue Lost", f"${-delta_ref:,.0f}")
-    c4.metric("Net Impact Lost", f"${-delta_net:,.0f}")
+        """,
+        unsafe_allow_html=True,
+    )
 
 # -------------------------------
 # Scenario export (CSV-style line)
