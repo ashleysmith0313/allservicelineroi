@@ -10,7 +10,29 @@ except Exception:
 st.set_page_config(page_title="All-Service Line ROI Calculator", layout="centered")
 st.title("🏥 All-Service Line ROI Calculator")
 st.caption("All Revenue and Cost Values are assumptive and can be modified with actual values • Powered by VISTA")
+# --- Disclaimer (visible, styled) ---
+DISCLAIMER_HTML = """
+<div style="
+  border-left: 6px solid #f59e0b;
+  background: #FFF7ED;
+  padding: 14px 16px;
+  border-radius: 12px;
+  margin: 8px 0 20px 0;
+  font-size: 0.95rem; line-height: 1.35;">
+  <strong>Disclaimer:</strong> This tool produces <em>illustrative estimates</em>, not guarantees.
+  All outputs are based on <em>assumptions, user-entered values, and generalized averages</em> derived from
+  <em>publicly available benchmarks</em> (e.g., CMS datasets) and industry/commercial analyses
+  (e.g., Definitive Healthcare) and may not reflect your organization’s actual performance.
+  Results do not constitute financial, legal, or reimbursement advice. Actual results vary by
+  payer mix, contracts, coding/DRG, case mix, and operations. Validate these figures with your
+  internal finance data before making decisions. Do not use for rate setting, price quotes, or
+  regulatory filings.
+</div>
+"""
+st.markdown(DISCLAIMER_HTML, unsafe_allow_html=True)
 
+# (Optional) tiny acknowledgment checkbox
+ack = st.checkbox("I understand these are assumptions/estimates and not guarantees.", value=True)
 # -------------------------------
 # Config loading (supports config/service_lines.yaml)
 # -------------------------------
