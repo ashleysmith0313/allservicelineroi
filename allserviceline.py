@@ -87,9 +87,9 @@ with left:
         min_value=0.0, value=float(svc["default"].get("unit_cost", 0.0)), step=100.0)
 
 with right:
-    referrals_per_unit = st.number_input("Avg Referrals per Unit", min_value=0.0,
+    referrals_per_unit = st.number_input("Avg Patient Downstream per Unit", min_value=0.0,
                                          value=float(svc["default"].get("referrals_per_unit", 0.0)), step=0.1)
-    revenue_per_referral = st.number_input("Baseline Revenue per Referral ($)", min_value=0.0,
+    revenue_per_referral = st.number_input("Baseline Downstream Revenue per Patient ($)", min_value=0.0,
                                            value=float(svc.get("referrals", {}).get("revenue_per_referral", 0.0)),
                                            step=50.0)
 
@@ -115,7 +115,7 @@ with loc_col3:
 # -------------------------------
 # Referral mix
 # -------------------------------
-st.subheader("🔗 Referral Revenue (Downstream)")
+st.subheader("🔗 Revenue (Downstream)")
 ref_cfg = svc.get("referrals", {})
 ref_types: List[Dict[str, Any]] = ref_cfg.get("types", [])
 
@@ -207,7 +207,7 @@ with met2:
     st.metric("Gross Revenue from Staffed Units", f"${active['gross_rev']:,.0f}")
     st.metric("Operating Cost for Staffed Units", f"${active['operating_cost']:,.0f}")
 with met3:
-    st.metric("Referral Revenue Generated", f"${active['referral_rev']:,.0f}")
+    st.metric("Downstream Revenue Generated", f"${active['referral_rev']:,.0f}")
     st.metric("Net Margin Before Locum Cost", f"${active['net_before']:,.0f}")
 
 st.metric("🔥 Net Financial Impact (After Locum)", f"${active['net_after']:,.0f}")
