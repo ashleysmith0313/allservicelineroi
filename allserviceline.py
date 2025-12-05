@@ -10,32 +10,17 @@ except Exception:
 st.set_page_config(page_title="All-Service Line ROI Calculator", layout="centered")
 st.title("🏥 All-Service Line ROI Calculator")
 st.caption("All Revenue and Cost Values are assumptive and can be modified with actual values • Powered by VISTA")
-# --- Disclaimer (visible, styled) ---
+
 DISCLAIMER_HTML = """
-<div style="
-  border-left: 6px solid #f59e0b;
-  background: #FFF7ED;
-  padding: 14px 16px;
-  border-radius: 12px;
-  margin: 8px 0 20px 0;
-  font-size: 0.95rem; line-height: 1.35;">
-  <strong>Disclaimer:</strong> This tool produces <em>illustrative estimates</em>, not guarantees.
-  All outputs are based on <em>assumptions, user-entered values, and generalized averages</em> derived from
-  <em>publicly available benchmarks</em> (e.g., CMS datasets) and industry/commercial analyses
-  (e.g., Definitive Healthcare) and may not reflect your organization’s actual performance.
-  Results do not constitute financial, legal, or reimbursement advice. Actual results vary by
-  payer mix, contracts, coding/DRG, case mix, and operations. Validate these figures with your
-  internal finance data before making decisions. Do not use for rate setting, price quotes, or
-  regulatory filings.
+<div style="border-left: 6px solid #f59e0b; background: #FFF7ED; padding: 14px 16px; border-radius: 12px; margin: 8px 0 20px 0; font-size: 0.95rem; line-height: 1.35;">
+  <strong>Disclaimer:</strong> This tool produces <em>illustrative estimates</em>, not guarantees. All outputs are based on <em>assumptions, user-entered values, and generalized averages</em> derived from
+  <em>publicly available benchmarks</em> and industry analyses and may not reflect your organization’s actual performance. Results do not constitute financial, legal, or reimbursement advice.
 </div>
 """
 st.markdown(DISCLAIMER_HTML, unsafe_allow_html=True)
 
-# (Optional) tiny acknowledgment checkbox
 ack = st.checkbox("I understand these are assumptions/estimates and not guarantees.", value=True)
-# -------------------------------
-# Config loading (supports config/service_lines.yaml)
-# -------------------------------
+
 @st.cache_data
 def load_config() -> Dict[str, Any]:
     sample = {
@@ -66,16 +51,12 @@ def load_config() -> Dict[str, Any]:
 CFG = load_config()
 SERVICE_MAP = {sl["display_name"]: sl for sl in CFG.get("service_lines", [])}
 
-# -------------------------------
-# UI: service line & defaults
-# -------------------------------
 service_name = st.selectbox("Select Service Line", list(SERVICE_MAP.keys()))
 svc = SERVICE_MAP[service_name]
 cap_label = svc.get("capacity_label", "Units")
 
 st.header("🛠️ Shift Details")
 left, right = st.columns(2)
-
 with left:
     total_units = st.number_input(f"Total {cap_label}", min_value=1, value=int(svc["default"].get("total_units", 1)))
     occupancy_pct = st.slider("Current Staffed % (without Locums)", 0, 100, int(svc["default"].get("occupancy_pct", 0)))
@@ -85,23 +66,16 @@ with left:
     unit_cost = st.number_input(
         f"Average Cost per {cap_label[:-1] if cap_label.endswith('s') else cap_label} ($)",
         min_value=0.0, value=float(svc["default"].get("unit_cost", 0.0)), step=100.0)
-
 with right:
     referrals_per_unit = st.number_input("Avg Patient Downstream per Unit", min_value=0.0,
                                          value=float(svc["default"].get("referrals_per_unit", 0.0)), step=0.1)
     revenue_per_referral = st.number_input("Baseline Downstream Revenue per Patient ($)", min_value=0.0,
-                                           value=float(svc.get("referrals", {}).get("revenue_per_referral", 0.0)),
-                                           step=50.0)
+                                           value=float(svc.get("referrals", {}).get("revenue_per_referral", 0.0)), step=50.0)
 
-# -------------------------------
-# Locum settings + toggle
-# -------------------------------
 st.subheader("👩‍⚕️ Locum Staffing")
 loc_cfg = svc.get("locum", {})
 use_locums = st.checkbox("Use Locums for this shift?", value=bool(loc_cfg.get("enabled", False)))
 
-# We always keep a set of locum settings (used for the WITH-locum scenario),
-# even when the toggle is off (so we can show the impact if locums were used).
 loc_col1, loc_col2, loc_col3 = st.columns(3)
 with loc_col1:
     locum_count_ui = st.number_input("Locums per Shift", min_value=0, value=int(loc_cfg.get("default_count", 1)))
@@ -112,9 +86,127 @@ with loc_col2:
 with loc_col3:
     locum_util_pct_ui = st.slider("Locum Utilization %", 0, 100, int(loc_cfg.get("utilization_pct", 0)))
 
-# ---- UPDATED: Exact Locum Spend (Overall/Period) override ----
+# ---- Exact Total Spend (Overall/Period) override ----
 exact_total_spend_override: Optional[float] = None
 use_exact_total_toggle: bool = False
+if use_locums:
+    st.markdown("**Exact Total Spend (optional)**: Enter your total locum spend for the entire analysis period (e.g., YTD or 365 days). This replaces the calculated per-shift spend × days.")
+    use_exact_total_toggle = st.toggle(
+        "Use exact total locum spend for the period?",
+        value=False,
+        help="If enabled, the exact amount below will be used for the period instead of (rate × hours + travel) × locum count × days.")
+    if use_exact_total_toggle:
+        exact_total_spend_override = float(st.number_input(
+            "Exact Total Locum Spend for Analysis Period ($)",
+            min_value=0.0,
+            value=0.0,
+            step=500.0,
+            help="Enter what you actually paid to locums over the period.",
+        ))
+
+st.subheader("🔗 Revenue (Downstream)")
+ref_cfg = svc.get("referrals", {})
+ref_types: List[Dict[str, Any]] = ref_cfg.get("types", [])
+
+cols = st.columns(max(1, len(ref_types)))
+percent_values: List[int] = []
+for i, rt in enumerate(ref_types):
+    with cols[i % len(cols)]:
+        pct = st.slider(f"{rt.get('name', f'Type {i+1}')} (%)", 0, 100, int(rt.get("pct", 0)))
+        percent_values.append(pct)
+
+pct_sum = sum(percent_values)
+normalize = st.toggle("Auto-normalize referral % to 100%", value=True)
+if pct_sum != 100:
+    if normalize and pct_sum > 0:
+        scale = 100.0 / pct_sum
+        percent_values = [round(p * scale) for p in percent_values]
+        drift = 100 - sum(percent_values)
+        if percent_values:
+            percent_values[0] += drift
+
+
+def referral_revenue_for(staffed_pct: float) -> float:
+    ref_total = total_units * referrals_per_unit * (max(0, min(100, staffed_pct)) / 100.0)
+    total = 0.0
+    for pct, rt in zip(percent_values, ref_types):
+        rt_referrals = ref_total * (pct / 100.0)
+        rt_unit_rev = float(rt.get("unit_rev", revenue_per_referral))
+        total += rt_referrals * rt_unit_rev
+    return total
+
+
+def scenario(
+    staffed_pct: float,
+    locum_count: int,
+    hourly_rate: float,
+    hours_per_shift: int,
+    travel_per_day: float,
+) -> Dict[str, float]:
+    staffed_pct = max(0, min(100, staffed_pct))
+    units_covered = int(round(total_units * staffed_pct / 100.0))
+    gross_rev = units_covered * float(unit_rev)
+    operating_cost = units_covered * float(unit_cost)
+    ref_rev = referral_revenue_for(staffed_pct)
+    locum_cost_per = (hourly_rate * hours_per_shift + travel_per_day) * locum_count
+    net_before = gross_rev + ref_rev - operating_cost
+    net_after = net_before - locum_cost_per
+    return {
+        "staffed_pct": staffed_pct,
+        "units_covered": units_covered,
+        "gross_rev": gross_rev,
+        "operating_cost": operating_cost,
+        "referral_rev": ref_rev,
+        "locum_total": locum_cost_per,
+        "net_before": net_before,
+        "net_after": net_after,
+    }
+
+with_locums = scenario(
+    staffed_pct=occupancy_pct + locum_util_pct_ui,
+    locum_count=locum_count_ui,
+    hourly_rate=hourly_rate_ui,
+    hours_per_shift=hours_per_shift_ui,
+    travel_per_day=travel_per_day_ui,
+)
+without_locums = scenario(
+    staffed_pct=occupancy_pct,
+    locum_count=0,
+    hourly_rate=0.0,
+    hours_per_shift=hours_per_shift_ui,
+    travel_per_day=0.0,
+)
+
+active = with_locums if use_locums else without_locums
+
+# Analysis period (days)
+annual_days = st.number_input("Analysis Period Days", min_value=1, max_value=366, value=365)
+
+# Period totals: if an exact TOTAL spend is provided and toggle is on, use it.
+if use_locums and use_exact_total_toggle and (exact_total_spend_override is not None) and (exact_total_spend_override > 0):
+    period_locum_cost = exact_total_spend_override
+else:
+    period_locum_cost = active["locum_total"] * annual_days
+
+period_net = active["net_before"] * annual_days - period_locum_cost
+
+missed_units = max(0, total_units - active["units_covered"])
+period_missed = missed_units * (float(unit_rev) + referrals_per_unit * float(revenue_per_referral) - float(unit_cost)) * annual_days
+
+st.header("📊 Shift Financial Summary")
+met1, met2, met3 = st.columns(3)
+with met1:
+    st.metric(f"{cap_label} Staffed This Shift", active["units_covered"])
+    st.metric(f"Unstaffed {cap_label}", total_units - active["units_covered"])
+with met2:
+    st.metric("Gross Revenue from Staffed Units", f"${active['gross_rev']:,.0f}")
+    st.metric("Operating Cost for Staffed Units", f"${active['operating_cost']:,.0f}")
+with met3:
+    st.metric("Downstream Revenue Generated", f"${active['referral_rev']:,.0f}")
+    st.metric("Net Margin Before Locum Cost", f"${active['net_before']:,.0f}")
+
+st.metric("🔥 Net Financial Impact (After Locum)", f"${active['net_after']:,.0f}")
+
 if use_locums:
     st.markdown(
         f"""
@@ -136,20 +228,7 @@ else:
         """,
         unsafe_allow_html=True,
     )
-else:
-    st.markdown(
-        f"""
-        ### 🧮 Estimated Annual Missed Opportunity ({annual_days} Days)
-        <div style='background-color:#990000;padding:1rem;border-radius:8px;color:white;'>
-        <strong>Annualized Net Loss: (${annualized_missed:,.0f})</strong>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
-# -------------------------------
-# Scenario export (CSV-style line)
-# -------------------------------
 if st.button("Copy Scenario Row"):
     row = {
         "service_line": service_name,
@@ -169,5 +248,5 @@ if st.button("Copy Scenario Row"):
         "locum_total_period": round(period_locum_cost, 2),
         "net_after_locum_period": round(period_net, 2),
     }
-    st.code(",".join(str(v) for v in row.values()))(",".join(str(v) for v in row.values()))
+    st.code(",".join(str(v) for v in row.values()))
     st.success("Scenario copied below as a CSV row.")
