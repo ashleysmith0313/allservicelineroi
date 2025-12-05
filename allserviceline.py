@@ -1,5 +1,5 @@
 import math
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import streamlit as st
 
 try:
@@ -112,6 +112,16 @@ with loc_col2:
 with loc_col3:
     locum_util_pct_ui = st.slider("Locum Utilization %", 0, 100, int(loc_cfg.get("utilization_pct", 0)))
 
+# ---- NEW: Exact Locum Spend override (appears only when using locums) ----
+exact_spend_override: Optional[float] = None
+if use_locums:
+    st.markdown("**Exact Spend (optional)**: Override calculated locum cost with your exact amount for this shift.")
+    exact_spend_toggle = st.toggle("Override with exact locum spend?", value=False, help="If enabled, the exact amount you enter below will be used instead of the calculated (rate × hours + travel) × locum count.")
+    if exact_spend_toggle:
+        exact_spend_input = st.number_input("Exact Locum Spend for This Shift ($)", min_value=0.0, value=0.0, step=100.0, help="Use the total you actually paid for locums for this one shift.")
+        # Use None when zero so users don't accidentally override with 0 unless they truly want to.
+        exact_spend_override = float(exact_spend_input)
+
 # -------------------------------
 # Referral mix
 # -------------------------------
@@ -148,14 +158,29 @@ def referral_revenue_for(staffed_pct: float) -> float:
 # -------------------------------
 # Scenario math helpers
 # -------------------------------
-def scenario(staffed_pct: float, locum_count: int, hourly_rate: float, hours_per_shift: int, travel_per_day: float):
+
+def scenario(
+    staffed_pct: float,
+    locum_count: int,
+    hourly_rate: float,
+    hours_per_shift: int,
+    travel_per_day: float,
+    exact_locum_total: Optional[float] = None,
+):
+    """Compute a scenario. If exact_locum_total is provided (non-None), it overrides calculated locum cost."""
     staffed_pct = max(0, min(100, staffed_pct))
     units_covered = int(round(total_units * staffed_pct / 100.0))
     gross_rev = units_covered * float(unit_rev)
     operating_cost = units_covered * float(unit_cost)
     ref_rev = referral_revenue_for(staffed_pct)
+
+    # Calculated cost per shift
     locum_cost_per = hourly_rate * hours_per_shift + travel_per_day
-    locum_total = locum_cost_per * locum_count
+    calculated_locum_total = locum_cost_per * locum_count
+
+    # Override if the user provided an exact spend
+    locum_total = calculated_locum_total if (exact_locum_total is None) else float(exact_locum_total)
+
     net_before = gross_rev + ref_rev - operating_cost
     net_after = net_before - locum_total
     return {
@@ -176,6 +201,7 @@ with_locums = scenario(
     hourly_rate=hourly_rate_ui,
     hours_per_shift=hours_per_shift_ui,
     travel_per_day=travel_per_day_ui,
+    exact_locum_total=exact_spend_override,
 )
 without_locums = scenario(
     staffed_pct=occupancy_pct,
