@@ -252,7 +252,7 @@ if st.button("Copy Scenario Row"):
     st.success("Scenario copied below as a CSV row.")
 
 # -------------------------------
-# Export to PDF (includes key grids and outcomes)
+# Export to PDF (text-only snapshot; no charts)
 # -------------------------------
 from io import BytesIO
 
@@ -262,33 +262,9 @@ def build_pdf_bytes():
         from reportlab.lib.pagesizes import letter
         from reportlab.pdfgen import canvas as pdfcanvas
         from reportlab.lib.units import inch
-        from reportlab.lib.utils import ImageReader
-    except Exception as e:
+    except Exception:
         st.error("ReportLab is required to export a PDF. Add 'reportlab' to your requirements.txt and rerun.")
         return None
-
-    # Optional mini chart (bar) for quick visual
-    chart_buf = None
-    try:
-        import matplotlib.pyplot as plt
-        labels = ["Gross Rev", "Oper Cost", "Downstream Rev", "Locum Cost", "Net After"]
-        values = [
-            float(active["gross_rev"]),
-            float(active["operating_cost"]),
-            float(active["referral_rev"]),
-            float(active["locum_total"]),
-            float(active["net_after"]),
-        ]
-        fig = plt.figure(figsize=(6, 2.8))
-        plt.bar(labels, values)
-        plt.ylabel("$")
-        plt.title("Shift Summary")
-        chart_buf = BytesIO()
-        fig.savefig(chart_buf, format="png", bbox_inches="tight")
-        plt.close(fig)
-        chart_buf.seek(0)
-    except Exception:
-        chart_buf = None
 
     buf = BytesIO()
     c = pdfcanvas.Canvas(buf, pagesize=letter)
@@ -297,13 +273,14 @@ def build_pdf_bytes():
     y = height - 0.75 * inch
     c.setFont("Helvetica-Bold", 14)
     c.drawString(0.75 * inch, y, "All-Service Line ROI Snapshot")
+
     c.setFont("Helvetica", 9)
     y -= 0.25 * inch
     c.drawString(0.75 * inch, y, f"Service Line: {service_name}")
     y -= 0.18 * inch
     c.drawString(0.75 * inch, y, f"Analysis Period (days): {annual_days}")
 
-    # Inputs grid (left col)
+    # Inputs grid
     y -= 0.35 * inch
     c.setFont("Helvetica-Bold", 11)
     c.drawString(0.75 * inch, y, "Inputs")
@@ -362,14 +339,6 @@ def build_pdf_bytes():
     c.drawString(0.8 * inch, y, f"Locum Spend (Period): ${period_locum_cost:,.0f}")
     y -= 0.16 * inch
     c.drawString(0.8 * inch, y, f"Net ROI (Period): ${period_net:,.0f}")
-
-    # Optional chart on the right / below
-    if chart_buf:
-        try:
-            img = ImageReader(chart_buf)
-            c.drawImage(img, 0.75 * inch, 0.75 * inch, width=6.8 * inch, preserveAspectRatio=True, mask='auto')
-        except Exception:
-            pass
 
     c.showPage()
     c.save()
