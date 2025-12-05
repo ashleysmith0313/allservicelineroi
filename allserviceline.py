@@ -12,21 +12,9 @@ st.title("🏥 All-Service Line ROI Calculator")
 st.caption("All Revenue and Cost Values are assumptive and can be modified with actual values • Powered by VISTA")
 
 DISCLAIMER_HTML = """
-<div style="
-  border-left: 6px solid #f59e0b;
-  background: #FFF7ED;
-  padding: 14px 16px;
-  border-radius: 12px;
-  margin: 8px 0 20px 0;
-  font-size: 0.95rem; line-height: 1.35;">
-  <strong>Disclaimer:</strong> This tool produces <em>illustrative estimates</em>, not guarantees.
-  All outputs are based on <em>assumptions, user-entered values, and generalized averages</em> derived from
-  <em>publicly available benchmarks</em> (e.g., CMS datasets) and industry/commercial analyses
-  (e.g., Definitive Healthcare) and may not reflect your organization’s actual performance.
-  Results do not constitute financial, legal, or reimbursement advice. Actual results vary by
-  payer mix, contracts, coding/DRG, case mix, and operations. Validate these figures with your
-  internal finance data before making decisions. Do not use for rate setting, price quotes, or
-  regulatory filings.
+<div style="border-left: 6px solid #f59e0b; background: #FFF7ED; padding: 14px 16px; border-radius: 12px; margin: 8px 0 20px 0; font-size: 0.95rem; line-height: 1.35;">
+  <strong>Disclaimer:</strong> This tool produces <em>illustrative estimates</em>, not guarantees. All outputs are based on <em>assumptions, user-entered values, and generalized averages</em> derived from
+  <em>publicly available benchmarks</em> and industry analyses and may not reflect your organization’s actual performance. Results do not constitute financial, legal, or reimbursement advice.
 </div>
 """
 st.markdown(DISCLAIMER_HTML, unsafe_allow_html=True)
@@ -263,3 +251,140 @@ if st.button("Copy Scenario Row"):
     st.code(",".join(str(v) for v in row.values()))
     st.success("Scenario copied below as a CSV row.")
 
+# -------------------------------
+# Export to PDF (includes key grids and outcomes)
+# -------------------------------
+from io import BytesIO
+
+def build_pdf_bytes():
+    try:
+        # Lazy imports so the app runs even if libs are missing until export is clicked
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas as pdfcanvas
+        from reportlab.lib.units import inch
+        from reportlab.lib.utils import ImageReader
+    except Exception as e:
+        st.error("ReportLab is required to export a PDF. Add 'reportlab' to your requirements.txt and rerun.")
+        return None
+
+    # Optional mini chart (bar) for quick visual
+    chart_buf = None
+    try:
+        import matplotlib.pyplot as plt
+        labels = ["Gross Rev", "Oper Cost", "Downstream Rev", "Locum Cost", "Net After"]
+        values = [
+            float(active["gross_rev"]),
+            float(active["operating_cost"]),
+            float(active["referral_rev"]),
+            float(active["locum_total"]),
+            float(active["net_after"]),
+        ]
+        fig = plt.figure(figsize=(6, 2.8))
+        plt.bar(labels, values)
+        plt.ylabel("$")
+        plt.title("Shift Summary")
+        chart_buf = BytesIO()
+        fig.savefig(chart_buf, format="png", bbox_inches="tight")
+        plt.close(fig)
+        chart_buf.seek(0)
+    except Exception:
+        chart_buf = None
+
+    buf = BytesIO()
+    c = pdfcanvas.Canvas(buf, pagesize=letter)
+    width, height = letter
+
+    y = height - 0.75 * inch
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(0.75 * inch, y, "All-Service Line ROI Snapshot")
+    c.setFont("Helvetica", 9)
+    y -= 0.25 * inch
+    c.drawString(0.75 * inch, y, f"Service Line: {service_name}")
+    y -= 0.18 * inch
+    c.drawString(0.75 * inch, y, f"Analysis Period (days): {annual_days}")
+
+    # Inputs grid (left col)
+    y -= 0.35 * inch
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(0.75 * inch, y, "Inputs")
+    c.setFont("Helvetica", 9)
+    y -= 0.18 * inch
+    inputs = [
+        (f"Total {cap_label}", total_units),
+        ("Staffed % (base)", f"{occupancy_pct}%"),
+        ("Locum Utilization %", f"{locum_util_pct_ui}%" if use_locums else "0%"),
+        (f"Revenue per {cap_label[:-1] if cap_label.endswith('s') else cap_label}", f"${unit_rev:,.0f}"),
+        (f"Cost per {cap_label[:-1] if cap_label.endswith('s') else cap_label}", f"${unit_cost:,.0f}"),
+        ("Referrals per Unit", referrals_per_unit),
+        ("Revenue per Referral (baseline)", f"${revenue_per_referral:,.0f}"),
+    ]
+    for k, v in inputs:
+        c.drawString(0.8 * inch, y, f"• {k}: {v}")
+        y -= 0.16 * inch
+
+    # Referral mix
+    y -= 0.1 * inch
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(0.75 * inch, y, "Referral Mix")
+    c.setFont("Helvetica", 9)
+    y -= 0.18 * inch
+    for pct, rt in zip(percent_values, ref_types):
+        line = f"{rt.get('name','Type')}: {pct}% @ ${float(rt.get('unit_rev', revenue_per_referral)):,.0f}"
+        c.drawString(0.8 * inch, y, f"• {line}")
+        y -= 0.16 * inch
+
+    # Metrics grid
+    y -= 0.1 * inch
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(0.75 * inch, y, "Shift Financial Summary")
+    y -= 0.18 * inch
+    c.setFont("Helvetica", 9)
+    metrics = [
+        (f"{cap_label} Staffed", f"{active['units_covered']:,}"),
+        (f"Unstaffed {cap_label}", f"{(total_units - active['units_covered']):,}"),
+        ("Gross Revenue", f"${active['gross_rev']:,.0f}"),
+        ("Operating Cost", f"${active['operating_cost']:,.0f}"),
+        ("Downstream Revenue", f"${active['referral_rev']:,.0f}"),
+        ("Net Before Locum", f"${active['net_before']:,.0f}"),
+        ("Locum Cost (shift)", f"${active['locum_total']:,.0f}"),
+        ("Net After Locum", f"${active['net_after']:,.0f}"),
+    ]
+    for k, v in metrics:
+        c.drawString(0.8 * inch, y, f"• {k}: {v}")
+        y -= 0.16 * inch
+
+    # Period impact
+    y -= 0.1 * inch
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(0.75 * inch, y, "Analysis Period Impact")
+    y -= 0.18 * inch
+    c.setFont("Helvetica", 9)
+    c.drawString(0.8 * inch, y, f"Locum Spend (Period): ${period_locum_cost:,.0f}")
+    y -= 0.16 * inch
+    c.drawString(0.8 * inch, y, f"Net ROI (Period): ${period_net:,.0f}")
+
+    # Optional chart on the right / below
+    if chart_buf:
+        try:
+            img = ImageReader(chart_buf)
+            c.drawImage(img, 0.75 * inch, 0.75 * inch, width=6.8 * inch, preserveAspectRatio=True, mask='auto')
+        except Exception:
+            pass
+
+    c.showPage()
+    c.save()
+    buf.seek(0)
+    return buf.getvalue()
+
+st.subheader("📄 Export")
+if st.button("Generate PDF Snapshot"):
+    pdf_bytes = build_pdf_bytes()
+    if pdf_bytes:
+        st.download_button(
+            label="Download PDF",
+            data=pdf_bytes,
+            file_name=f"{service_name.replace(' ', '_').lower()}_roi_snapshot.pdf",
+            mime="application/pdf",
+        )
+    else:
+        st.stop()
