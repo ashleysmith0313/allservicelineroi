@@ -112,139 +112,26 @@ with loc_col2:
 with loc_col3:
     locum_util_pct_ui = st.slider("Locum Utilization %", 0, 100, int(loc_cfg.get("utilization_pct", 0)))
 
-# ---- NEW: Exact Locum Spend override (appears only when using locums) ----
-exact_spend_override: Optional[float] = None
-if use_locums:
-    st.markdown("**Exact Spend (optional)**: Override calculated locum cost with your exact amount for this shift.")
-    exact_spend_toggle = st.toggle("Override with exact locum spend?", value=False, help="If enabled, the exact amount you enter below will be used instead of the calculated (rate × hours + travel) × locum count.")
-    if exact_spend_toggle:
-        exact_spend_input = st.number_input("Exact Locum Spend for This Shift ($)", min_value=0.0, value=0.0, step=100.0, help="Use the total you actually paid for locums for this one shift.")
-        # Use None when zero so users don't accidentally override with 0 unless they truly want to.
-        exact_spend_override = float(exact_spend_input)
-
-# -------------------------------
-# Referral mix
-# -------------------------------
-st.subheader("🔗 Revenue (Downstream)")
-ref_cfg = svc.get("referrals", {})
-ref_types: List[Dict[str, Any]] = ref_cfg.get("types", [])
-
-cols = st.columns(max(1, len(ref_types)))
-percent_values = []
-for i, rt in enumerate(ref_types):
-    with cols[i % len(cols)]:
-        pct = st.slider(f"{rt.get('name', f'Type {i+1}')} (%)", 0, 100, int(rt.get("pct", 0)))
-        percent_values.append(pct)
-
-pct_sum = sum(percent_values)
-normalize = st.toggle("Auto-normalize referral % to 100%", value=True)
-if pct_sum != 100:
-    if normalize and pct_sum > 0:
-        scale = 100.0 / pct_sum
-        percent_values = [round(p * scale) for p in percent_values]
-        drift = 100 - sum(percent_values)
-        if percent_values:
-            percent_values[0] += drift
-
-def referral_revenue_for(staffed_pct: float) -> float:
-    ref_total = total_units * referrals_per_unit * (max(0, min(100, staffed_pct)) / 100.0)
-    total = 0.0
-    for pct, rt in zip(percent_values, ref_types):
-        rt_referrals = ref_total * (pct / 100.0)
-        rt_unit_rev = float(rt.get("unit_rev", revenue_per_referral))
-        total += rt_referrals * rt_unit_rev
-    return total
-
-# -------------------------------
-# Scenario math helpers
-# -------------------------------
-
-def scenario(
-    staffed_pct: float,
-    locum_count: int,
-    hourly_rate: float,
-    hours_per_shift: int,
-    travel_per_day: float,
-    exact_locum_total: Optional[float] = None,
-):
-    """Compute a scenario. If exact_locum_total is provided (non-None), it overrides calculated locum cost."""
-    staffed_pct = max(0, min(100, staffed_pct))
-    units_covered = int(round(total_units * staffed_pct / 100.0))
-    gross_rev = units_covered * float(unit_rev)
-    operating_cost = units_covered * float(unit_cost)
-    ref_rev = referral_revenue_for(staffed_pct)
-
-    # Calculated cost per shift
-    locum_cost_per = hourly_rate * hours_per_shift + travel_per_day
-    calculated_locum_total = locum_cost_per * locum_count
-
-    # Override if the user provided an exact spend
-    locum_total = calculated_locum_total if (exact_locum_total is None) else float(exact_locum_total)
-
-    net_before = gross_rev + ref_rev - operating_cost
-    net_after = net_before - locum_total
-    return {
-        "staffed_pct": staffed_pct,
-        "units_covered": units_covered,
-        "gross_rev": gross_rev,
-        "operating_cost": operating_cost,
-        "referral_rev": ref_rev,
-        "locum_total": locum_total,
-        "net_before": net_before,
-        "net_after": net_after,
-    }
-
-# Build both scenarios so we can show the impact either way
-with_locums = scenario(
-    staffed_pct=occupancy_pct + locum_util_pct_ui,
-    locum_count=locum_count_ui,
-    hourly_rate=hourly_rate_ui,
-    hours_per_shift=hours_per_shift_ui,
-    travel_per_day=travel_per_day_ui,
-    exact_locum_total=exact_spend_override,
-)
-without_locums = scenario(
-    staffed_pct=occupancy_pct,
-    locum_count=0,
-    hourly_rate=0.0,
-    hours_per_shift=hours_per_shift_ui,
-    travel_per_day=0.0,
-)
-
-# Choose which scenario is "active" based on the toggle
-active = with_locums if use_locums else without_locums
-
-# Annualization
-annual_days = st.number_input("Annualization Days", min_value=1, max_value=366, value=365)
-annualized_net = active["net_after"] * annual_days
-annualized_locum_cost = active["locum_total"] * annual_days
-missed_units = max(0, total_units - active["units_covered"])
-annualized_missed = missed_units * (float(unit_rev) + referrals_per_unit * float(revenue_per_referral) - float(unit_cost)) * annual_days
-
-# -------------------------------
-# Output summary (active scenario)
-# -------------------------------
-st.header("📊 Shift Financial Summary")
-met1, met2, met3 = st.columns(3)
-with met1:
-    st.metric(f"{cap_label} Staffed This Shift", active["units_covered"])
-    st.metric(f"Unstaffed {cap_label}", total_units - active["units_covered"])
-with met2:
-    st.metric("Gross Revenue from Staffed Units", f"${active['gross_rev']:,.0f}")
-    st.metric("Operating Cost for Staffed Units", f"${active['operating_cost']:,.0f}")
-with met3:
-    st.metric("Downstream Revenue Generated", f"${active['referral_rev']:,.0f}")
-    st.metric("Net Margin Before Locum Cost", f"${active['net_before']:,.0f}")
-
-st.metric("🔥 Net Financial Impact (After Locum)", f"${active['net_after']:,.0f}")
-
+# ---- UPDATED: Exact Locum Spend (Overall/Period) override ----
+exact_total_spend_override: Optional[float] = None
+use_exact_total_toggle: bool = False
 if use_locums:
     st.markdown(
         f"""
-        ### 🧮 Estimated Annual Impact ({annual_days} Days)
+        ### 🧮 Analysis Period Impact ({annual_days} Days)
         <div style='background-color:#d4f4dd;padding:1rem;border-radius:8px;'>
-        <strong>Annualized Net ROI (With Locum): ${annualized_net:,.0f}</strong><br>
-        <em>Annualized Locum Cost: ${annualized_locum_cost:,.0f}</em>
+        <strong>Net ROI (Period): ${period_net:,.0f}</strong><br>
+        <em>Locum Spend (Period): ${period_locum_cost:,.0f}{' • using exact total override' if (use_exact_total_toggle and (exact_total_spend_override or 0) > 0) else ''}</em>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+else:
+    st.markdown(
+        f"""
+        ### 🧮 Estimated Missed Opportunity (Period: {annual_days} Days)
+        <div style='background-color:#990000;padding:1rem;border-radius:8px;color:white;'>
+        <strong>Net Loss (Period): (${period_missed:,.0f})</strong>
         </div>
         """,
         unsafe_allow_html=True,
@@ -275,9 +162,12 @@ if st.button("Copy Scenario Row"):
         "referral_revenue": round(active["referral_rev"], 2),
         "gross_rev": round(active["gross_rev"], 2),
         "operating_cost": round(active["operating_cost"], 2),
-        "net_before_locum": round(active["net_before"], 2),
-        "locum_total": round(active["locum_total"], 2),
-        "net_after_locum": round(active["net_after"], 2),
+        "net_before_locum_per_shift": round(active["net_before"], 2),
+        "locum_total_per_shift": round(active["locum_total"], 2),
+        "net_after_locum_per_shift": round(active["net_after"], 2),
+        "period_days": annual_days,
+        "locum_total_period": round(period_locum_cost, 2),
+        "net_after_locum_period": round(period_net, 2),
     }
-    st.code(",".join(str(v) for v in row.values()))
+    st.code(",".join(str(v) for v in row.values()))(",".join(str(v) for v in row.values()))
     st.success("Scenario copied below as a CSV row.")
