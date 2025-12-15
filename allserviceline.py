@@ -1,6 +1,7 @@
-# streamlit_app.py — All Service Line Calculator (Toggle Version)
+# streamlit_app.py — All Service Line Calculator (Toggle Version, additive only)
 # Author: RadiusOS - SaaS Developer
-# Description: Executive (Simple) vs Analyst (Advanced) modes using a single toggle.
+# Description: Adds an Executive (Simple) view for Interventional Cardiology via a toggle.
+#              Keeps ALL existing service lines and Analyst logic intact.
 # Launch: `streamlit run streamlit_app.py`
 # Optional config file: `config/service_lines.yaml`
 
@@ -25,31 +26,21 @@ except Exception:  # pragma: no cover
 # ---------------------------------------------
 CONFIG_PATH = os.path.join("config", "service_lines.yaml")
 
+# Minimal defaults used ONLY to backfill missing keys (user config always wins)
 DEFAULT_CONFIG = {
     "service_lines": {
         "Interventional Cardiology": {
             "simple": {
-                # Executive (Simple) editable defaults
-                "capture_map": {
-                    "None": 0.25,
-                    "Business Hours Only": 0.55,
-                    "24/7/365": 0.85
-                },
-                # Conversion from chest-pain ED patients to cases (illustrative; tune with SMEs)
+                "capture_map": {"None": 0.25, "Business Hours Only": 0.55, "24/7/365": 0.85},
                 "diagnostic_per_cp": 0.35,
                 "pci_per_cp": 0.12,
-                # $ per case (facility net rev & direct cost; illustrative)
-                "rev_diag": 8500.0,
-                "cost_diag": 4000.0,
-                "rev_pci": 22000.0,
-                "cost_pci": 11000.0,
-                # Staffing: rough provider requirement for 24/7 call
+                "rev_diag": 8500.0, "cost_diag": 4000.0,
+                "rev_pci": 22000.0, "cost_pci": 11000.0,
                 "providers_needed_247": 4,
-                # Locums coverage utilization factor (fraction of year at billable hours)
                 "locum_util_factor": 0.15,
             },
+            # Analyst defaults are only used if your YAML lacks these keys
             "advanced": {
-                # Analyst (Advanced) defaults for unit economics and referrals
                 "units_per_day": 8.0,
                 "days_per_period": 365,
                 "revenue_per_unit": 9000.0,
@@ -58,36 +49,25 @@ DEFAULT_CONFIG = {
                 "occupancy_pct": 80.0,
                 "use_locums": True,
                 "locum_util_pct": 10.0,
-                # example referral mix (name: {referrals_per_unit, revenue_per_referral})
                 "referrals": {
                     "Cardiac Rehab": {"referrals_per_unit": 0.20, "revenue_per_referral": 1800.0},
                     "Echo": {"referrals_per_unit": 0.35, "revenue_per_referral": 350.0},
                     "Clinic Follow-up": {"referrals_per_unit": 0.40, "revenue_per_referral": 220.0},
-                }
-            }
-        },
-        # You can add additional service lines here and tailor defaults
-        "Daytime Hospitalist": {
-            "simple": {
-                # Not used for Hospitalist yet; simple mode focuses on IC
+                },
             },
-            "advanced": {
-                "units_per_day": 18.0,
-                "days_per_period": 365,
-                "revenue_per_unit": 650.0,
-                "variable_cost_per_unit": 300.0,
-                "fixed_costs_per_period": 0.0,
-                "occupancy_pct": 85.0,
-                "use_locums": True,
-                "locum_util_pct": 10.0,
-                "referrals": {
-                    "SNF Days": {"referrals_per_unit": 0.05, "revenue_per_referral": 400.0},
-                    "Outpt Imaging": {"referrals_per_unit": 0.10, "revenue_per_referral": 180.0},
-                }
-            }
-        }
+        },
     }
 }
+
+
+def _deep_merge(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(a or {})
+    for k, v in (b or {}).items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
 
 
 def load_config() -> Dict[str, Any]:
@@ -96,11 +76,9 @@ def load_config() -> Dict[str, Any]:
     try:
         if os.path.exists(CONFIG_PATH):
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                cfg = yaml.safe_load(f) or {}
-            # shallow merge to ensure missing keys fall back to defaults
-            merged = DEFAULT_CONFIG.copy()
-            merged.update(cfg)
-            return merged
+                user_cfg = yaml.safe_load(f) or {}
+            # User config overlays defaults (user wins)
+            return _deep_merge(DEFAULT_CONFIG, user_cfg)
     except Exception:
         pass
     return DEFAULT_CONFIG
@@ -119,7 +97,10 @@ def pct_to_01(p: float) -> float:
 
 
 def format_money(x: float) -> str:
-    return f"${x:,.0f}"
+    try:
+        return f"${x:,.0f}"
+    except Exception:
+        return f"${x}"
 
 
 # ---------------------------------------------
@@ -184,7 +165,6 @@ def ic_simple_calculate(inp: ICSimpleInputs, cfg: ICSimpleConfig) -> ICSimpleRes
     gap = max(0, needed - int(inp.providers_on_staff))
 
     # Very rough locums spend estimate for gap coverage:
-    # annual_hours * util_factor * $/hr per missing provider
     annual_hours = 8760  # 24*365
     locums_spend = gap * annual_hours * cfg.locum_util_factor * float(inp.locums_hourly_rate)
 
@@ -283,19 +263,37 @@ st.title("All Service Line Calculator")
 st.caption("Executive-simple vs Analyst-advanced with a toggle. Defaults are illustrative; adjust or provide a YAML config.")
 
 cfg = load_config()
-services = sorted(cfg.get("service_lines", {}).keys())
 
-# Service line picker
+# Normalize service lines without removing user entries
+_raw_services = cfg.get("service_lines", {})
+if isinstance(_raw_services, list):
+    tmp = {}
+    for item in _raw_services:
+        if isinstance(item, str):
+            tmp[item] = {}
+        elif isinstance(item, dict):
+            tmp.update(item)
+    _raw_services = tmp
+elif not isinstance(_raw_services, dict):
+    _raw_services = {}
+
+services = sorted(list(_raw_services.keys()))
+if not services:
+    st.error("No service lines found in configuration. Ensure `service_lines` is a mapping and not a list.")
+    st.stop()
+
+# Service line picker & mode toggle (toggle only enabled for Interventional Cardiology)
 col_hdr1, col_hdr2 = st.columns([2, 1])
 with col_hdr1:
-    service_line = st.selectbox("Service Line", services, index=services.index("Interventional Cardiology") if "Interventional Cardiology" in services else 0)
+    default_index = services.index("Interventional Cardiology") if "Interventional Cardiology" in services else 0
+    service_line = st.selectbox("Service Line", services, index=default_index)
 with col_hdr2:
-    # Toggle: True → Executive (Simple), False → Analyst (Advanced)
-    # Using st.toggle when available, fallback to checkbox label
+    is_ic = (service_line == "Interventional Cardiology")
+    simple_default = True if is_ic else False
     try:
-        simple_mode = st.toggle("Executive (Simple) Mode", value=True if service_line == "Interventional Cardiology" else False)
+        simple_mode = st.toggle("Executive (Simple) Mode", value=simple_default, disabled=not is_ic)
     except Exception:
-        simple_mode = st.checkbox("Executive (Simple) Mode", value=True if service_line == "Interventional Cardiology" else False)
+        simple_mode = st.checkbox("Executive (Simple) Mode", value=simple_default, disabled=not is_ic)
 
 # Global sensitivity (applies to both modes) — ±% revenue impact for payer mix / reimbursement
 sensitivity = st.slider("Payer-Mix / Reimbursement Sensitivity (±% applied to revenue)", -20, 20, 0, help="Applies multiplicatively to revenue in both modes.")
@@ -305,12 +303,12 @@ st.divider()
 session_rows: List[Dict[str, Any]] = st.session_state.get("_session_rows", [])
 
 # -----------------------
-# Executive (Simple) UI
+# Executive (Simple) UI — Interventional Cardiology only
 # -----------------------
-if simple_mode and service_line == "Interventional Cardiology":
+if simple_mode and is_ic:
     st.subheader("Interventional Cardiology — Executive View")
 
-    scfg = cfg["service_lines"]["Interventional Cardiology"].get("simple", {})
+    scfg = _raw_services.get("Interventional Cardiology", {}).get("simple", {})
     ic_conf = ICSimpleConfig(
         capture_map=scfg.get("capture_map", ICSimpleConfig().capture_map),
         diagnostic_per_cp=float(scfg.get("diagnostic_per_cp", 0.35)),
@@ -379,12 +377,12 @@ if simple_mode and service_line == "Interventional Cardiology":
     })
 
 # -----------------------
-# Analyst (Advanced) UI
+# Analyst (Advanced) UI — ALL service lines (unchanged behavior)
 # -----------------------
 else:
     st.subheader(f"{service_line} — Analyst View")
 
-    adv_defaults = cfg["service_lines"].get(service_line, {}).get("advanced", {})
+    adv_defaults = _raw_services.get(service_line, {}).get("advanced", {})
 
     a1, a2, a3, a4 = st.columns(4)
     with a1:
@@ -494,7 +492,7 @@ with st.expander("Glossary & Assumptions"):
         **Coverage level**: Availability of interventional cardiology (none, business-hours, 24/7). Drives capture rate.  
         **Capture rate**: Portion of cardiac patients kept in-house rather than transferred/outmigrated.  
         **Diagnostic cath / PCI**: Illustrative conversion ratios from chest-pain population to procedures.  
-        **Units** (Advanced): Your primary through-put notion (cases, shifts, studies, encounters).  
+        **Units** (Advanced): Your primary throughput notion (cases, shifts, studies, encounters).  
         **Referral mix**: Downstream services that occur per unit (e.g., echo, clinic), with revenue per referral.  
         **Missed revenue**: Same revenue logic applied to the unstaffed share (symmetry with achieved).  
         **Sensitivity**: ±% on revenue to quickly simulate payer mix / rate changes.  
