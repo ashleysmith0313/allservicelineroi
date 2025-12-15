@@ -3,15 +3,21 @@
 # - Keeps existing service lines & Analyst flow intact
 # - Adds an Executive (Simple) toggle for Interventional Cardiology only
 # - Safer math (staffed% clamp) + symmetric missed-opportunity using referral mix
+# - Executive PDF reporting with charts (pie charts for case mix and economics)
 
 import math
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import streamlit as st
 
 try:
     import yaml
 except Exception:
     yaml = None
+
+import io
+from io import BytesIO
+
+import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="All-Service Line ROI Calculator", layout="centered")
 st.title("🏥 All-Service Line ROI Calculator")
@@ -238,6 +244,7 @@ without_locums = scenario(
 active = with_locums if use_locums else without_locums
 
 # ---------- Executive (Simple) view for IC ----------
+exec_metrics: Optional[Dict[str, float]] = None
 if simple_mode and is_ic:
     st.header("🫀 Interventional Cardiology — Executive View")
     ic_s = svc.get("ic_simple", {})
@@ -275,6 +282,7 @@ if simple_mode and is_ic:
     annual_hours = 8760
     locums_spend = gap * annual_hours * util_factor * float(loc_rate)
 
+    # Display metrics
     m1, m2, m3 = st.columns(3)
     m1.metric("Est. Annual Caths (Diagnostic)", f"{diag_cases:,.0f}")
     m2.metric("Est. Annual PCIs", f"{pci_cases:,.0f}")
@@ -291,6 +299,40 @@ if simple_mode and is_ic:
     g2.metric("Provider Gap", f"{gap}")
     g3.metric("Rough Locums Spend for Gap", f"${locums_spend:,.0f}")
 
+    # Build pie charts
+    st.subheader("📈 Visuals (Executive)")
+
+    fig1, ax1 = plt.subplots()
+    ax1.pie([diag_cases, pci_cases], labels=["Diagnostics", "PCIs"], autopct='%1.0f%%')
+    ax1.set_title("Case Mix")
+    st.pyplot(fig1, use_container_width=True)
+
+    # Economics composition: cost vs margin (positive only) to avoid negative slices
+    pos_margin = max(0.0, margin)
+    econ_values = [cost, pos_margin]
+    econ_labels = ["Direct Cost", "Net Margin"]
+    fig2, ax2 = plt.subplots()
+    ax2.pie(econ_values, labels=econ_labels, autopct='%1.0f%%')
+    ax2.set_title("Economics Composition")
+    st.pyplot(fig2, use_container_width=True)
+
+    # Keep for export
+    exec_metrics = {
+        "ed_visits": ed_visits,
+        "chest_pain_pct": chest_pain_pct,
+        "coverage": coverage,
+        "providers": providers,
+        "loc_rate": loc_rate,
+        "diag_cases": diag_cases,
+        "pci_cases": pci_cases,
+        "gross": gross,
+        "cost": cost,
+        "margin": margin,
+        "providers_needed": providers_needed,
+        "gap": gap,
+        "locums_spend": locums_spend,
+    }
+
 st.header("📊 Shift Financial Summary")
 met1, met2, met3 = st.columns(3)
 with met1:
@@ -304,6 +346,39 @@ with met3:
     st.metric("Net Margin Before Locum Cost", f"${active['net_before']:,.0f}")
 
 st.metric("🔥 Net Financial Impact (After Locum)", f"${active['net_after']:,.0f}")
+
+# ---- Analyst visuals (pie charts) ----
+# Revenue composition: unit revenue vs referral revenue
+fig_rev, ax_rev = plt.subplots()
+rev_unit = max(0.0, active['gross_rev'])
+rev_ref = max(0.0, active['referral_rev'])
+if (rev_unit + rev_ref) > 0:
+    ax_rev.pie([rev_unit, rev_ref], labels=["Unit Revenue", "Referral Revenue"], autopct='%1.0f%%')
+else:
+    ax_rev.pie([1], labels=["No Revenue"], autopct='%1.0f%%')
+ax_rev.set_title("Revenue Composition")
+st.pyplot(fig_rev, use_container_width=True)
+
+# Cost composition: operating vs locum cost
+fig_cost, ax_cost = plt.subplots()
+cost_oper = max(0.0, active['operating_cost'])
+cost_loc = max(0.0, active['locum_total'])
+if (cost_oper + cost_loc) > 0:
+    ax_cost.pie([cost_oper, cost_loc], labels=["Operating Cost", "Locum Cost"], autopct='%1.0f%%')
+else:
+    ax_cost.pie([1], labels=["No Cost"], autopct='%1.0f%%')
+ax_cost.set_title("Cost Composition")
+st.pyplot(fig_cost, use_container_width=True)
+
+# Export helpers for Analyst report
+from io import BytesIO as _BIO
+
+def _fig_to_png_bytes(fig):
+    b = _BIO(); fig.savefig(b, format='png', bbox_inches='tight', dpi=180); plt.close(fig); b.seek(0); return b.getvalue()
+
+analyst_revenue_png = _fig_to_png_bytes(fig_rev)
+analyst_cost_png = _fig_to_png_bytes(fig_cost)
+
 
 # Analysis period (days)
 annual_days = st.number_input("Analysis Period Days", min_value=1, max_value=366, value=365)
@@ -368,18 +443,25 @@ if st.button("Copy Scenario Row"):
     st.success("Scenario copied below as a CSV row.")
 
 # -------------------------------
-# Export to PDF (text-only snapshot; no charts)
+# Export to PDF (supports Executive visuals when enabled)
 # -------------------------------
-from io import BytesIO
 
-def build_pdf_bytes():
+def _save_fig_as_png_bytes(fig) -> bytes:
+    buf = BytesIO()
+    fig.savefig(buf, format='png', bbox_inches='tight', dpi=180)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def build_pdf_bytes(exec_block: Optional[Dict[str, float]] = None, case_mix_png: Optional[bytes] = None, econ_png: Optional[bytes] = None, analyst_block: Optional[Dict[str, float]] = None, analyst_revenue_png: Optional[bytes] = None, analyst_cost_png: Optional[bytes] = None):exec_block: Optional[Dict[str, float]] = None, case_mix_png: Optional[bytes] = None, econ_png: Optional[bytes] = None):
     try:
-        # Lazy imports so the app runs even if libs are missing until export is clicked
         from reportlab.lib.pagesizes import letter
         from reportlab.pdfgen import canvas as pdfcanvas
         from reportlab.lib.units import inch
+        from reportlab.lib.utils import ImageReader
     except Exception:
-        st.error("ReportLab is required to export a PDF. Add 'reportlab' to your requirements.txt and rerun.")
+        st.error("ReportLab is required to export a PDF. Add 'reportlab' to requirements.txt and rerun.")
         return None
 
     buf = BytesIO()
@@ -396,38 +478,64 @@ def build_pdf_bytes():
     y -= 0.18 * inch
     c.drawString(0.75 * inch, y, f"Analysis Period (days): {annual_days}")
 
-    # Inputs grid
-    y -= 0.35 * inch
-    c.setFont("Helvetica-Bold", 11)
-    c.drawString(0.75 * inch, y, "Inputs")
-    c.setFont("Helvetica", 9)
-    y -= 0.18 * inch
-    inputs = [
-        (f"Total {cap_label}", total_units),
-        ("Staffed % (base)", f"{occupancy_pct}%"),
-        ("Locum Utilization %", f"{locum_util_pct_ui}%" if use_locums else "0%"),
-        (f"Revenue per {cap_label[:-1] if cap_label.endswith('s') else cap_label}", f"${unit_rev:,.0f}"),
-        (f"Cost per {cap_label[:-1] if cap_label.endswith('s') else cap_label}", f"${unit_cost:,.0f}"),
-        ("Referrals per Unit", referrals_per_unit),
-        ("Revenue per Referral (baseline)", f"${revenue_per_referral:,.0f}"),
-    ]
-    for k, v in inputs:
-        c.drawString(0.8 * inch, y, f"• {k}: {v}")
+    # Executive block (if provided)
+    if exec_block is not None:
+        y -= 0.35 * inch
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(0.75 * inch, y, "Executive (Interventional Cardiology)")
+        c.setFont("Helvetica", 9)
         y -= 0.16 * inch
+        lines = [
+            f"ED Visits: {int(exec_block['ed_visits']):,}",
+            f"Chest Pain %: {exec_block['chest_pain_pct']}%",
+            f"Coverage: {exec_block['coverage']}",
+            f"IC on Staff: {int(exec_block['providers'])}",
+            f"Locums $/hr: ${exec_block['loc_rate']:,.0f}",
+            f"Est. Diagnostics: {exec_block['diag_cases']:,.0f}",
+            f"Est. PCIs: {exec_block['pci_cases']:,.0f}",
+            f"Gross: ${exec_block['gross']:,.0f}  Cost: ${exec_block['cost']:,.0f}  Net: ${exec_block['margin']:,.0f}",
+            f"Providers Needed 24/7: {int(exec_block['providers_needed'])}  Gap: {int(exec_block['gap'])}",
+            f"Rough Locums Spend (Gap): ${exec_block['locums_spend']:,.0f}",
+        ]
+        for L in lines:
+            c.drawString(0.8 * inch, y, f"• {L}")
+            y -= 0.16 * inch
 
-    # Referral mix
-    y -= 0.1 * inch
-    c.setFont("Helvetica-Bold", 11)
-    c.drawString(0.75 * inch, y, "Referral Mix")
-    c.setFont("Helvetica", 9)
-    y -= 0.18 * inch
-    for pct, rt in zip(percent_values, ref_types):
-        line = f"{rt.get('name','Type')}: {pct}% @ ${float(rt.get('unit_rev', revenue_per_referral)):,.0f}"
-        c.drawString(0.8 * inch, y, f"• {line}")
+        # Insert charts if available
+        if case_mix_png is not None:
+            img = ImageReader(BytesIO(case_mix_png))
+            c.drawImage(img, 0.75 * inch, y - 2.6 * inch, width=3.7 * inch, height=2.6 * inch, preserveAspectRatio=True, mask='auto')
+        if econ_png is not None:
+            img2 = ImageReader(BytesIO(econ_png))
+            c.drawImage(img2, 4.5 * inch, y - 2.6 * inch, width=3.7 * inch, height=2.6 * inch, preserveAspectRatio=True, mask='auto')
+        y -= 2.8 * inch
+
+    # Analyst visuals block (if provided)
+    if analyst_block is not None:
+        y -= 0.25 * inch
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(0.75 * inch, y, "Analyst View — Composition Charts")
+        c.setFont("Helvetica", 9)
         y -= 0.16 * inch
+        lines = [
+            f"Units Covered: {analyst_block['units_covered']:,} / {analyst_block['total_units']:,}",
+            f"Revenue — Unit: ${analyst_block['gross_rev']:,.0f}  Referral: ${analyst_block['referral_rev']:,.0f}",
+            f"Costs — Operating: ${analyst_block['operating_cost']:,.0f}  Locum: ${analyst_block['locum_total']:,.0f}",
+            f"Net After Locum: ${analyst_block['net_after']:,.0f}",
+        ]
+        for L in lines:
+            c.drawString(0.8 * inch, y, f"• {L}")
+            y -= 0.16 * inch
+        if analyst_revenue_png is not None:
+            ar = ImageReader(BytesIO(analyst_revenue_png))
+            c.drawImage(ar, 0.75 * inch, y - 2.6 * inch, width=3.7 * inch, height=2.6 * inch, preserveAspectRatio=True, mask='auto')
+        if analyst_cost_png is not None:
+            ac = ImageReader(BytesIO(analyst_cost_png))
+            c.drawImage(ac, 4.5 * inch, y - 2.6 * inch, width=3.7 * inch, height=2.6 * inch, preserveAspectRatio=True, mask='auto')
+        y -= 2.8 * inch
 
-    # Metrics grid
-    y -= 0.1 * inch
+    # Shift metrics
+    y -= 0.2 * inch
     c.setFont("Helvetica-Bold", 11)
     c.drawString(0.75 * inch, y, "Shift Financial Summary")
     y -= 0.18 * inch
@@ -462,14 +570,49 @@ def build_pdf_bytes():
     return buf.getvalue()
 
 st.subheader("📄 Export")
-if st.button("Generate PDF Snapshot"):
-    pdf_bytes = build_pdf_bytes()
+
+# When in Executive IC mode, include a dedicated Executive Report button with charts
+case_mix_png = econ_png = None
+if exec_metrics is not None:
+    # Rebuild charts silently for export
+    fig1, ax1 = plt.subplots()
+    ax1.pie([exec_metrics["diag_cases"], exec_metrics["pci_cases"]], labels=["Diagnostics", "PCIs"], autopct='%1.0f%%')
+    ax1.set_title("Case Mix")
+    case_mix_png = _save_fig_as_png_bytes(fig1)
+
+    fig2, ax2 = plt.subplots()
+    pos_margin = max(0.0, exec_metrics["margin"])
+    ax2.pie([exec_metrics["cost"], pos_margin], labels=["Direct Cost", "Net Margin"], autopct='%1.0f%%')
+    ax2.set_title("Economics Composition")
+    econ_png = _save_fig_as_png_bytes(fig2)
+
+    if st.button("Download Executive Report (PDF)"):
+        pdf_bytes = build_pdf_bytes(exec_block=exec_metrics, case_mix_png=case_mix_png, econ_png=econ_png,
+                                    analyst_block=None)
+        if pdf_bytes:
+            st.download_button(
+                label="Download PDF",
+                data=pdf_bytes,
+                file_name="interventional_cardiology_executive_report.pdf",
+                mime="application/pdf",
+            )
+
+# Analyst report always available; includes pies even if Executive is visible
+analyst_block = {
+    "units_covered": active["units_covered"],
+    "total_units": total_units,
+    "gross_rev": active["gross_rev"],
+    "referral_rev": active["referral_rev"],
+    "operating_cost": active["operating_cost"],
+    "locum_total": active["locum_total"],
+    "net_after": active["net_after"],
+}
+if st.button("Download Analyst Report (PDF)"):
+    pdf_bytes = build_pdf_bytes(analyst_block=analyst_block, analyst_revenue_png=analyst_revenue_png, analyst_cost_png=analyst_cost_png)
     if pdf_bytes:
         st.download_button(
             label="Download PDF",
             data=pdf_bytes,
-            file_name=f"{service_name.replace(' ', '_').lower()}_roi_snapshot.pdf",
+            file_name=f"{service_name.replace(' ', '_').lower()}_analyst_report.pdf",
             mime="application/pdf",
         )
-    else:
-        st.stop()
