@@ -298,23 +298,7 @@ if simple_mode and is_ic:
     g1.metric("Providers Needed (24/7)", f"{providers_needed}")
     g2.metric("Provider Gap", f"{gap}")
     g3.metric("Rough Locums Spend for Gap", f"${locums_spend:,.0f}")
-
-    # Build pie charts
-    st.subheader("📈 Visuals (Executive)")
-
-    fig1, ax1 = plt.subplots()
-    ax1.pie([diag_cases, pci_cases], labels=["Diagnostics", "PCIs"], autopct='%1.0f%%')
-    ax1.set_title("Case Mix")
-    st.pyplot(fig1, use_container_width=True)
-
-    # Economics composition: cost vs margin (positive only) to avoid negative slices
-    pos_margin = max(0.0, margin)
-    econ_values = [cost, pos_margin]
-    econ_labels = ["Direct Cost", "Net Margin"]
-    fig2, ax2 = plt.subplots()
-    ax2.pie(econ_values, labels=econ_labels, autopct='%1.0f%%')
-    ax2.set_title("Economics Composition")
-    st.pyplot(fig2, use_container_width=True)
+    # (Charts are generated only for PDF export to keep the UI clean)
 
     # Keep for export
     exec_metrics = {
@@ -347,37 +331,9 @@ with met3:
 
 st.metric("🔥 Net Financial Impact (After Locum)", f"${active['net_after']:,.0f}")
 
-# ---- Analyst visuals (pie charts) ----
-# Revenue composition: unit revenue vs referral revenue
-fig_rev, ax_rev = plt.subplots()
-rev_unit = max(0.0, active['gross_rev'])
-rev_ref = max(0.0, active['referral_rev'])
-if (rev_unit + rev_ref) > 0:
-    ax_rev.pie([rev_unit, rev_ref], labels=["Unit Revenue", "Referral Revenue"], autopct='%1.0f%%')
-else:
-    ax_rev.pie([1], labels=["No Revenue"], autopct='%1.0f%%')
-ax_rev.set_title("Revenue Composition")
-st.pyplot(fig_rev, use_container_width=True)
-
-# Cost composition: operating vs locum cost
-fig_cost, ax_cost = plt.subplots()
-cost_oper = max(0.0, active['operating_cost'])
-cost_loc = max(0.0, active['locum_total'])
-if (cost_oper + cost_loc) > 0:
-    ax_cost.pie([cost_oper, cost_loc], labels=["Operating Cost", "Locum Cost"], autopct='%1.0f%%')
-else:
-    ax_cost.pie([1], labels=["No Cost"], autopct='%1.0f%%')
-ax_cost.set_title("Cost Composition")
-st.pyplot(fig_cost, use_container_width=True)
-
-# Export helpers for Analyst report
-from io import BytesIO as _BIO
-
-def _fig_to_png_bytes(fig):
-    b = _BIO(); fig.savefig(b, format='png', bbox_inches='tight', dpi=180); plt.close(fig); b.seek(0); return b.getvalue()
-
-analyst_revenue_png = _fig_to_png_bytes(fig_rev)
-analyst_cost_png = _fig_to_png_bytes(fig_cost)
+# (Analyst pies are generated only for PDF export, not displayed in UI)
+analyst_revenue_png = None
+analyst_cost_png = None
 
 
 # Analysis period (days)
@@ -608,11 +564,34 @@ analyst_block = {
     "net_after": active["net_after"],
 }
 if st.button("Download Analyst Report (PDF)"):
+    # Build pies only for export (not shown in UI)
+    fig_rev, ax_rev = plt.subplots()
+    rev_unit = max(0.0, analyst_block['gross_rev'])
+    rev_ref = max(0.0, analyst_block['referral_rev'])
+    if (rev_unit + rev_ref) > 0:
+        ax_rev.pie([rev_unit, rev_ref], labels=["Unit Revenue", "Referral Revenue"], autopct='%1.0f%%')
+    else:
+        ax_rev.pie([1], labels=["No Revenue"], autopct='%1.0f%%')
+    ax_rev.set_title("Revenue Composition")
+    analyst_revenue_png = _save_fig_as_png_bytes(fig_rev)
+
+    fig_cost, ax_cost = plt.subplots()
+    cost_oper = max(0.0, analyst_block['operating_cost'])
+    cost_loc = max(0.0, analyst_block['locum_total'])
+    if (cost_oper + cost_loc) > 0:
+        ax_cost.pie([cost_oper, cost_loc], labels=["Operating Cost", "Locum Cost"], autopct='%1.0f%%')
+    else:
+        ax_cost.pie([1], labels=["No Cost"], autopct='%1.0f%%')
+    ax_cost.set_title("Cost Composition")
+    analyst_cost_png = _save_fig_as_png_bytes(fig_cost)
+
     pdf_bytes = build_pdf_bytes(analyst_block=analyst_block, analyst_revenue_png=analyst_revenue_png, analyst_cost_png=analyst_cost_png)
     if pdf_bytes:
         st.download_button(
             label="Download PDF",
             data=pdf_bytes,
             file_name=f"{service_name.replace(' ', '_').lower()}_analyst_report.pdf",
+            mime="application/pdf",
+        ).lower()}_analyst_report.pdf",
             mime="application/pdf",
         )
