@@ -454,7 +454,7 @@ def _save_fig_as_png_bytes(fig) -> bytes:
     return buf.getvalue()
 
 
-def build_pdf_bytes(exec_block=None, case_mix_png=None, econ_png=None, analyst_block=None, analyst_revenue_png=None, analyst_cost_png=None):exec_block: Optional[Dict[str, float]] = None, case_mix_png: Optional[bytes] = None, econ_png: Optional[bytes] = None):
+def build_pdf_bytes(exec_block=None, case_mix_png=None, econ_png=None, analyst_block=None, analyst_revenue_png=None, analyst_cost_png=None):
     try:
         from reportlab.lib.pagesizes import letter
         from reportlab.pdfgen import canvas as pdfcanvas
