@@ -590,7 +590,7 @@ if st.button("Download Analyst Report (PDF)"):
         st.download_button(
             label="Download PDF",
             data=pdf_bytes,
-            file_name=f"{service_name.replace(' ', '_').lower()}_analyst_report.pdf",
+            file_name="{}_analyst_report.pdf".format(service_name.replace(' ', '_').lower()),
             mime="application/pdf",
         ).lower()}_analyst_report.pdf",
             mime="application/pdf",
